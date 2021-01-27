@@ -7,23 +7,19 @@ import "@openzeppelin/contracts/access/Ownable.sol";
 // This token is owned by Timelock.
 contract ROC is ERC20("Roxe Cash", "ROC"), Ownable {
 
-    uint256 constant INITIAL_SUPPLY = 1e28;  // 10 billion = 1e10 * 1e18
+    mapping(address => bool) public issuerMap;
 
-    uint256 public timeToMintMore;
+    modifier onlyIssuer() {
+        require(issuerMap[msg.sender], "The caller does not have issuer role privileges");
+        _;
+    }
 
-    function start(address _to) public onlyOwner {
-        require(timeToMintMore == 0, "already started");
-
-        _mint(_to, INITIAL_SUPPLY);
-        _moveDelegates(address(0), _delegates[_to], INITIAL_SUPPLY);
-
-        timeToMintMore = now + (1461 days);  // 4 years
+    function setIssuer(address _issuer, bool _isIssuer) external onlyOwner {
+        issuerMap[_issuer] = _isIssuer;
     }
 
     /// @notice Creates `_amount` token to `_to`.
-    function mint(address _to, uint256 _amount) public onlyOwner {
-        require(now > timeToMintMore && timeToMintMore > 0, "need to wait 4 years");
-
+    function mint(address _to, uint256 _amount) external onlyIssuer {
         _mint(_to, _amount);
         _moveDelegates(address(0), _delegates[_to], _amount);
     }
@@ -39,7 +35,7 @@ contract ROC is ERC20("Roxe Cash", "ROC"), Ownable {
         _moveDelegates(_delegates[_msgSender()], address(0), _amount);
     }
 
-    /// @notice A record of each accounts delegate
+    /// @dev @notice A record of each accounts delegate
     mapping (address => address) internal _delegates;
 
     /// @notice A checkpoint for marking number of votes from a given block
