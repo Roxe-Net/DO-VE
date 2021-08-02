@@ -7,6 +7,7 @@ import "@openzeppelin/contracts/token/ERC20/IERC20.sol";
 
 import "./interfaces/IDO.sol";
 import "./interfaces/IHolder.sol";
+import "./interfaces/ILayerManager.sol";
 import "./interfaces/IROC.sol";
 import "./interfaces/IRoUSD.sol";
 import "./uniswapv2/interfaces/IUniswapV2Router02.sol";
@@ -31,10 +32,13 @@ contract Reserve is Ownable {
     HolderInfo[] public holderInfoArray;
     uint256 constant HOLDER_SHARE_BASE = 10000;
 
+    uint256 public earlyPrice = 5e16;  // 0.05
     uint256 public price;  // Unset, 1e17 means 0.1
     uint256 public sold;  // amount of sold ROC
     uint256 public soldInPreviousLayers;
     uint256 public cost;  // amound of received roUSD
+
+    ILayerManager public layerManager;
 
     uint256 public reserveRatio = 800000;  // 0.8
 
@@ -82,9 +86,15 @@ contract Reserve is Ownable {
         cost = _cost;
     }
 
+    function setEarlyPrice(uint256 _earlyPrice) external onlyOwner {
+        require(price == 0, "Price should not be set");
+        earlyPrice = _earlyPrice;
+    }
+
     // Please only call this function after 1 year.
     function setInitialPrice(uint256 _price) external onlyOwner {
         require(price == 0, "Can only set once");
+        require(price >= earlyPrice, "Must be larger than early price");
         price = _price;
     }
 
@@ -98,6 +108,10 @@ contract Reserve is Ownable {
             info.share = _shares[i];
             holderInfoArray.push(info);
         }
+    }
+
+    function setLayerManager(ILayerManager _layerManager) external onlyOwner {
+        layerManager = _layerManager;
     }
 
     function setRouter(IUniswapV2Router02 _router) external onlyOwner {
@@ -347,32 +361,6 @@ contract Reserve is Ownable {
         return amountOfROC;
     }
 
-    function getAmountPerLayer(uint256 _soldAmount) public pure returns(uint256) {
-        if (_soldAmount < 5000000 * 1e18) {
-            return 50000 * 1e18;
-        } else if (_soldAmount < 15000000 * 1e18) {
-            return 100000 * 1e18;
-        } else if (_soldAmount < 35000000 * 1e18) {
-            return 200000 * 1e18;
-        } else if (_soldAmount < 65000000 * 1e18) {
-            return 300000 * 1e18;
-        } else if (_soldAmount < 115000000 * 1e18) {
-            return 500000 * 1e18;
-        } else {
-            return 1000000 * 1e18;
-        }
-    }
-
-    function getPriceIncrementPerLayer(uint256 _soldAmount) public pure returns(uint256) {
-        if (_soldAmount < 515000000 * 1e18) {
-            return 1e15;  // 0.001 roUSD
-        } else if (_soldAmount < 2765000000 * 1e18) {
-            return 4e15;  // 0.004 roUSD
-        } else {
-            return 8e15;  // 0.008 roUSD
-        }
-    }
-
     function estimateRoUSDAmountFromROC(
         uint256 _amountOfROC
     ) public view returns(uint256, uint256, uint256, uint256) {
@@ -383,7 +371,7 @@ contract Reserve is Ownable {
         uint256 mSoldInPreviousLayers = soldInPreviousLayers;
 
         uint256 amountOfRoUSD = 0;
-        uint256 remainingInLayer = getAmountPerLayer(mSold).add(soldInPreviousLayers).sub(mSold);
+        uint256 remainingInLayer = layerManager.getAmountPerLayer(mSold).add(soldInPreviousLayers).sub(mSold);
 
         while (_amountOfROC > 0) {
             if (_amountOfROC < remainingInLayer) {
@@ -393,14 +381,14 @@ contract Reserve is Ownable {
             } else {
                 amountOfRoUSD = amountOfRoUSD.add(remainingInLayer.mul(mPrice).div(PRICE_BASE));
                 _amountOfROC = _amountOfROC.sub(remainingInLayer);
-                mPrice = mPrice.add(getPriceIncrementPerLayer(mSold));
+                mPrice = mPrice.add(layerManager.getPriceIncrementPerLayer(mSold));
 
                 // Updates mSold and mSoldInPreviousLayers.
-                mSoldInPreviousLayers = mSoldInPreviousLayers.add(getAmountPerLayer(mSold));
+                mSoldInPreviousLayers = mSoldInPreviousLayers.add(layerManager.getAmountPerLayer(mSold));
                 mSold = mSold.add(remainingInLayer);
 
                 // Move to a new layer.
-                remainingInLayer = getAmountPerLayer(mSold);
+                remainingInLayer = layerManager.getAmountPerLayer(mSold);
             }
         }
 
@@ -417,7 +405,7 @@ contract Reserve is Ownable {
         uint256 mSoldInPreviousLayers = soldInPreviousLayers;
 
         uint256 amountOfROC = 0;
-        uint256 remainingInLayer = getAmountPerLayer(mSold).add(soldInPreviousLayers).sub(mSold);
+        uint256 remainingInLayer = layerManager.getAmountPerLayer(mSold).add(soldInPreviousLayers).sub(mSold);
 
         while (_amountOfRoUSD > 0) {
             uint256 amountEstimate = _amountOfRoUSD.mul(PRICE_BASE).div(mPrice);
@@ -429,14 +417,14 @@ contract Reserve is Ownable {
             } else {
                 amountOfROC = amountOfROC.add(remainingInLayer);
                 _amountOfRoUSD = _amountOfRoUSD.sub(remainingInLayer.mul(mPrice).div(PRICE_BASE));
-                mPrice = mPrice.add(getPriceIncrementPerLayer(mSold));
+                mPrice = mPrice.add(layerManager.getPriceIncrementPerLayer(mSold));
 
                 // Updates mSold and mSoldInPreviousLayers.
-                mSoldInPreviousLayers = mSoldInPreviousLayers.add(getAmountPerLayer(mSold));
+                mSoldInPreviousLayers = mSoldInPreviousLayers.add(layerManager.getAmountPerLayer(mSold));
                 mSold = mSold.add(remainingInLayer);
 
                 // Move to a new layer.
-                remainingInLayer = getAmountPerLayer(mSold);
+                remainingInLayer = layerManager.getAmountPerLayer(mSold);
             }
         }
 
@@ -444,7 +432,11 @@ contract Reserve is Ownable {
     }
 
     function getAveragePriceOfROC() public view returns(uint256) {
-        return cost.mul(PRICE_BASE).div(sold);
+        if (price == 0) {
+            return earlyPrice;
+        } else {
+            return cost.mul(PRICE_BASE).div(sold);
+        }
     }
 
     function mintExactAmountOfDO(
